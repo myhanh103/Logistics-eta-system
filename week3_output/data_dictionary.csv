@@ -1,0 +1,105 @@
+﻿file,column,dtype,description,example,role
+trips_history.csv,trip_id,str,Ma luot di = tuyen_ngay_gio (duy nhat),R1_20261019_0600,real
+trips_history.csv,route_id,str,"R1 Ton Duc Thang-Nguyen Huu Canh, R2 Hai Ba Trung->Dien Bien Phu, R3 Ham Thu Thiem",R1,real
+trips_history.csv,route_name,str,Ten tuyen,Hầm Thủ Thiêm,real
+trips_history.csv,date,date,Ngay (YYYY-MM-DD),2026-10-19,real
+trips_history.csv,departure_time,str,Gio xuat phat HH:MM,06:00,real
+trips_history.csv,departure_time_full,datetime,Ngay + gio xuat phat,2026-10-19 06:00:00,real
+trips_history.csv,hour,int,Gio xuat phat (0-23),6,feature
+trips_history.csv,day_of_week,int,"Thu trong tuan, 0=Thu Hai ... 6=Chu Nhat",0,feature
+trips_history.csv,is_weekend,int,1 neu Thu Bay/Chu Nhat,0,feature
+trips_history.csv,time_slot,str,"Khung gio: dem(0-5h), sang_som(6h), cao_diem_sang(7-9h), trua(10-14h), cao_diem_chieu(15-19h), toi(20-23h)",cao_diem_chieu,feature
+trips_history.csv,is_peak,int,1 neu khung cao diem sang/chieu,1,feature
+trips_history.csv,distance_km,float,Quang duong do tren ban do (km),5.3,feature
+trips_history.csv,map_time_min,str,"Khoang thoi gian ban do hien thi, 'thap - cao' (phut)",9 - 18,real
+trips_history.csv,map_time_low_min,float,Can duoi khoang thoi gian map,9,feature
+trips_history.csv,map_time_high_min,float,Can tren khoang thoi gian map,18,feature
+trips_history.csv,map_time_mid_min,float,Trung diem khoang thoi gian map,13.5,feature
+trips_history.csv,est_time_min,float,Thoi gian du doan trong bao cao tuan 2 (phut),14,real
+trips_history.csv,actual_travel_time,float,"NHAN huan luyen = est_time_min (phut). Chu y: la uoc tinh tu ban do, khong phai do GPS thuc",14,label
+trips_history.csv,avg_speed_kmh,float,Van toc TB = distance_km / est_time_min x 60,22.7,real
+trips_history.csv,speed_recomputed,int,1 neu van toc goc bi hong va da tinh lai,0,qc
+trips_history.csv,status,str,Tinh trang giao thong goc tu ban do,Chậm nhẹ,real
+trips_history.csv,status_ord,int,"0 Thong thoang, 1 Cham nhe, 2 Ket xe nang, 3 Un tac nghiem trong (khong dua vao feature de tranh ro ri nhan)",1,real
+trips_history.csv,weather_desc,str,Mo ta thoi tiet TP.HCM,Nhiều mây,real
+trips_history.csv,weather_code,str,Ma thoi tiet chuan hoa,cloudy,feature
+trips_history.csv,temp_c,float,Nhiet do (do C),26.3,feature
+trips_history.csv,humidity_pct,float,Do am (%),81,feature
+trips_history.csv,rain_mm_h,float,Luong mua (mm/gio),0.0,feature
+trips_history.csv,is_raining,int,1 neu rain_mm_h > 0,0,feature
+trips_history.csv,origin_lat,float,Vi do diem dau tuyen (XAP XI),10.7691,approx
+trips_history.csv,origin_lon,float,Kinh do diem dau tuyen (XAP XI),106.7064,approx
+trips_history.csv,dest_lat,float,Vi do diem cuoi tuyen (XAP XI),10.7975,approx
+trips_history.csv,dest_lon,float,Kinh do diem cuoi tuyen (XAP XI),106.7215,approx
+trips_history.csv,osrm_time_min,float,Thoi gian OSRM tong cac doan (de trong neu chua goi duoc OSRM),,osrm
+trips_history.csv,is_simulated,int,"0 = du lieu that (quan sat tay), 1 = mo phong",0,meta
+trips_history.csv,data_source,str,osrm_api | openstreetmap | simulated | manual,manual,meta
+trips_history.csv,label_type,str,map_estimate = nhan lay tu uoc tinh ban do,map_estimate,meta
+trips_history.csv,src_row,int,So dong trong trip_data.csv goc (truy vet),3,meta
+ml_features.csv,trip_id,str,Khoa noi voi trips_history.csv,R1_20261019_0600,key
+ml_features.csv,route_code,int,"R1=1, R2=2, R3=3",1,feature
+ml_features.csv,hour,int,Gio xuat phat,6,feature
+ml_features.csv,day_of_week,int,0=Thu Hai,0,feature
+ml_features.csv,is_weekend,int,Cuoi tuan,0,feature
+ml_features.csv,is_peak,int,Cao diem,1,feature
+ml_features.csv,time_slot_code,int,dem0 sang_som1 cao_diem_sang2 trua3 cao_diem_chieu4 toi5,1,feature
+ml_features.csv,distance_km,float,Khoang cach (km),5.3,feature
+ml_features.csv,map_time_mid_min,float,Trung diem thoi gian ban do (thay the/di kem OSRM),13.5,feature
+ml_features.csv,osrm_time_min,float,Thoi gian OSRM (co the NaN),,feature
+ml_features.csv,temp_c,float,Nhiet do,26.3,feature
+ml_features.csv,humidity_pct,float,Do am,81,feature
+ml_features.csv,rain_mm_h,float,Luong mua,0.0,feature
+ml_features.csv,is_simulated,int,0 that / 1 mo phong - dung de loc khi danh gia,0,meta
+ml_features.csv,target_travel_time_min,float,NHAN: thoi gian di (phut),14,label
+road_segments.csv,segment_id,str,Ma doan SEG01..SEG12,SEG01,key
+road_segments.csv,route_id,str,Tuyen chua doan,R1,key
+road_segments.csv,seq,int,Thu tu doan trong tuyen,1,
+road_segments.csv,segment_name,str,Ten doan,,
+road_segments.csv,start_lat,float,Vi do diem dau (xap xi),10.7691,
+road_segments.csv,start_lon,float,Kinh do diem dau (xap xi),106.7064,
+road_segments.csv,end_lat,float,Vi do diem cuoi (xap xi),10.7760,
+road_segments.csv,end_lon,float,Kinh do diem cuoi (xap xi),106.7062,
+road_segments.csv,road_type,str,arterial / tunnel / tunnel_approach,arterial,
+road_segments.csv,straight_km,float,Khoang cach duong chim bay,0.77,
+road_segments.csv,length_km_est,float,Chieu dai uoc tinh = ty le x quang duong tuyen,1.17,
+road_segments.csv,osrm_distance_km,float,Quang duong OSRM (neu co),,
+road_segments.csv,osrm_time_min,float,Thoi gian OSRM (neu co),,
+road_segments.csv,coord_source,str,manual_approx = dat tay xap xi,manual_approx,
+road_segments.csv,needs_verification,int,1 = can doi chieu lai toa do,1,
+traffic_observations.csv,obs_id,str,Ma quan sat,,key
+traffic_observations.csv,observation_level,str,route (that) | segment (mo phong),route,
+traffic_observations.csv,route_id,str,Tuyen,R1,
+traffic_observations.csv,segment_id,str,Doan (rong neu muc tuyen),,
+traffic_observations.csv,obs_time,datetime,Thoi diem quan sat,2026-10-19 06:00:00,
+traffic_observations.csv,hour,int,Gio,6,
+traffic_observations.csv,day_of_week,int,0=Thu Hai,0,
+traffic_observations.csv,time_slot,str,Khung gio,sang_som,
+traffic_observations.csv,speed_kmh,float,Van toc (km/h),26.5,
+traffic_observations.csv,status,str,Tinh trang giao thong goc,Thông thoáng,
+traffic_observations.csv,is_simulated,int,0 that / 1 mo phong,0,
+traffic_observations.csv,data_source,str,manual (that) | simulated,manual,
+traffic_observations.csv,note,str,Ghi chu xu ly,,
+delivery_orders.csv,order_id,str,Ma don ORD001..,ORD001,key
+delivery_orders.csv,delivery_trip_id,str,Ma chuyen giao DT01.. (3-5 diem/chuyen),DT01,
+delivery_orders.csv,stop_seq,int,Thu tu diem giao,1,
+delivery_orders.csv,order_date,date,Ngay giao,2026-11-02,
+delivery_orders.csv,planned_departure,datetime,Gio xuat phat du kien tu kho,2026-11-02 08:00:00,
+delivery_orders.csv,depot_id/lat/lon,,Kho xuat phat (mo phong),DEPOT01,
+delivery_orders.csv,dest_zone,str,Khu vuc giao,Quận 1,
+delivery_orders.csv,dest_lat/lon,float,Toa do diem giao (ngau nhien trong khu vuc),,
+delivery_orders.csv,address_label,str,"Nhan dia chi gia lap, khong co dia chi that",,
+delivery_orders.csv,weight_kg,float,Khoi luong (kg),4.2,
+delivery_orders.csv,service_time_min,int,Thoi gian giao tai diem (phut),5,
+delivery_orders.csv,time_window_start/end,str,Khung gio giao HH:MM,08:20,
+delivery_orders.csv,is_simulated,int,Luon 1,1,
+delivery_orders.csv,data_source,str,simulated,simulated,
+gps_simulated.csv,gps_id,str,Ma diem GPS,GPS00001,key
+gps_simulated.csv,delivery_trip_id,str,Chuyen giao hang (noi voi delivery_orders),DT01,
+gps_simulated.csv,timestamp,datetime,Thoi diem (moi 30 giay),2026-11-02 08:00:00,
+gps_simulated.csv,lat/lon,float,"Toa do co nhieu GPS ~5 m; noi suy duong thang x he so 1.3, CHUA map-matching",,
+gps_simulated.csv,speed_kmh,float,Van toc tuc thoi (0 khi dung giao hang),21.4,
+gps_simulated.csv,heading_deg,float,"Huong di (do, 0=Bac)",45.0,
+gps_simulated.csv,next_stop_seq,int,Diem giao ke tiep,1,
+gps_simulated.csv,is_stopped,int,1 khi dang giao tai diem,0,
+gps_simulated.csv,is_simulated,int,Luon 1,1,
+gps_simulated.csv,data_source,str,simulated,simulated,

@@ -1,0 +1,18 @@
+{
+  "seed": 42,
+  "input": {
+    "file": "trip_data.csv",
+    "sha256": "6c2d140b9ffd434a6694aed51536e29d5c9051d790945b79e8c2b7fc5f9a6826",
+    "locked": true
+  },
+  "outputs": {
+    "trips_history.csv": "21c064c783dff099626ef179fabad15ba4be6d9a6b7f9b9e845ee19e91e02402",
+    "ml_features.csv": "5f5c63e6ecb05609f6af02dcfb788d561d52756d27bfb355889fa2c13baabf02",
+    "road_segments.csv": "fee811d216b6dea9da97135f09cdd4609cbf22461d3d9457f3fa6a92a6dae1b3",
+    "traffic_observations.csv": "d00da17904ba9293569290718ceb1383f8ee4d2d220b8e956ab5e74da3dcd301",
+    "delivery_orders.csv": "d67c36b298c4d8a0a3f0a84371266a0870e4c6ef000da7706e0a97face8aec91",
+    "gps_simulated.csv": "abd2c189e0169800dcacebfbfda831c1ea4610cd042a59d5c645f0f72755f467",
+    "data_dictionary.csv": "4cae51805a8937ad7407db4683bb907d4e4f6b28e999a402c3bdc3678008d6db",
+    "data_quality_report.md": "53eb3d62a7676e4a86f6837593f697a1d1d925226f71f303abc1aeab21a83ce9"
+  }
+}
