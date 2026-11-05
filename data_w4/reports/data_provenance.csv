@@ -1,0 +1,9 @@
+﻿file,rows,real,osrm,simulated,manual_estimate,note
+processed/trips_history.csv,741,741,0,0,0,Thật: đọc tay từ Google Maps. Nhãn thời gian là ước tính của bản đồ. Cột osrm_time_min còn trống
+processed/ml_features.csv,741,741,0,0,0,Cùng nguồn trips_history
+processed/road_segments.csv,12,0,0,0,12,"Tọa độ đặt tay xấp xỉ, chưa kiểm chứng; cột OSRM còn trống"
+processed/traffic_observations.csv,3705,741,0,2964,0,Thật ở mức tuyến (Google Maps); mô phỏng ở mức đoạn
+processed/traffic_summary.csv,855,171,0,684,0,Tổng hợp từ traffic_observations
+processed/delivery_orders.csv,80,0,0,80,0,"Toàn bộ mô phỏng, kể cả hạn giao và giờ hoàn thành"
+simulated/gps_simulated.csv,19645,0,0,19645,0,Mô phỏng. Cột osrm = số dòng có geometry từ OSRM; hiện có 0 đoạn OSRM trong cache
+simulated/gps_scenarios/*.csv,30529,0,0,30529,0,"Mô phỏng, có đáp án trong anomaly_log.csv"

@@ -1,0 +1,7 @@
+﻿scenario_id,file,description,n_trips,n_rows,n_anomaly_rows
+S01_normal,S01_normal.csv,Di chuyển bình thường (không có bất thường),5,4407,0
+S02_long_stop,S02_long_stop.csv,Dừng lâu: một điểm giao bị dừng thêm 15-30 phút,5,6726,1298
+S03_traffic_jam,S03_traffic_jam.csv,Kẹt xe mô phỏng: vận tốc giảm còn 20-40% trên đoạn dài 300-600 m,5,5443,253
+S04_gps_loss,S04_gps_loss.csv,Mất GPS: 1-3 khoảng mất tín hiệu 1-8 phút (thiếu dòng),5,5502,0
+S05_route_deviation,S05_route_deviation.csv,Lệch tuyến: xe đi lệch 250-700 m rồi quay lại,5,4799,354
+S06_bad_gps,S06_bad_gps.csv,"GPS sai: nhảy vị trí, trôi, tọa độ null/0, đảo lat-lon, tốc độ đột biến, trùng dòng, sai thứ tự",5,3652,494
