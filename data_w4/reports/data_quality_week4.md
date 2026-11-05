@@ -1,4 +1,4 @@
-# Báo cáo chất lượng dữ liệu - Tuần 4 (Thảo Vy)
+# Báo cáo chất lượng dữ liệu - Tuần 4 
 
 Sinh tự động bởi `prepare_week4_data.py` (seed=2026, tần suất GPS 5 giây). Chạy lại cho cùng kết quả.
 
@@ -29,7 +29,7 @@ Sinh tự động bởi `prepare_week4_data.py` (seed=2026, tần suất GPS 5 g
 | data/reports/data_provenance.csv | Số dòng thật / OSRM / mô phỏng / ước lượng thủ công của từng file |
 | data/processed/delivery_orders.csv | 80 đơn / 20 chuyến (từ tuần 3, đã chuẩn hóa, mục 8) |
 
-## 3. Phân loại dữ liệu: thật, OSRM, mô phỏng (4.2.6)
+## 3. Phân loại dữ liệu: thật, OSRM, mô phỏng 
 
 Quy ước: **Thật** = đọc tay từ Google Maps (`is_simulated = 0`, `data_source = manual`). **OSRM** = giá trị lấy trực tiếp từ OSRM (`data_source = osrm_api`). **Mô phỏng** = sinh bằng code (`is_simulated = 1`, `data_source = simulated`). **Ước lượng thủ công** = nhập tay xấp xỉ, không đo và không mô phỏng.
 
@@ -46,7 +46,7 @@ Quy ước: **Thật** = đọc tay từ Google Maps (`is_simulated = 0`, `data_
 
 **Hiện chưa có dữ liệu nào từ OSRM** (tổng cột OSRM = 0). Dữ liệu thật chỉ gồm 741 lượt đi và 741 quan sát vận tốc mức tuyến, cùng nguồn Google Maps; mọi thứ liên quan đến đoạn đường, đơn hàng và GPS là mô phỏng hoặc ước lượng. Không dùng dữ liệu mô phỏng để báo cáo độ chính xác của mô hình.
 
-## 4. Dataset GPS mô phỏng (4.2.1)
+## 4. Dataset GPS mô phỏng 
 
 Cột chính: `delivery_trip_id` (mã chuyến), `timestamp`, `lat`, `lon`, `speed_kmh`, `heading_deg`, `next_stop_seq`, `phase` (drive/light/delivery/long_stop), `is_stopped`, cùng cột đáp án `true_lat`, `true_lon`, `route_offset_m`, `is_anomaly`, `anomaly_type`. Mọi dòng có `is_simulated = 1`, `data_source = simulated`.
 
@@ -58,7 +58,7 @@ Cột chính: `delivery_trip_id` (mã chuyến), `timestamp`, `lat`, `lon`, `spe
 
 > **Geometry hiện là tổng hợp, chưa phải OSRM.** Máy chủ OSRM công cộng không truy cập được từ môi trường tạo dữ liệu này, nên 80/80 đoạn đi được dựng bằng đường gấp khúc 3 đoạn giữa hai điểm (cột `geometry_source = synthetic`). Vị trí trên đường thật chưa đúng. Để đạt yêu cầu 4.2.1, chạy trên máy có internet: `python prepare_week4_data.py --osrm`. Lệnh này lưu geometry OSRM vào `data/simulated/osrm_cache/` rồi dựng lại toàn bộ dữ liệu; các lần chạy sau tự dùng cache.
 
-## 5. Script phát GPS (4.2.2)
+## 5. Script phát GPS 
 
 ```bash
 python gps_simulator.py play --trip DT01 --speed 10 --interval 5     # phát nhanh gấp 10 lần, lấy mẫu 5 giây
@@ -70,7 +70,7 @@ python gps_simulator.py play --config play_config.json               # cấu hì
 - `--speed`: 1 = thời gian thực, N = nhanh gấp N lần, 0 = không chờ. `--interval`: 5-10 giây (lấy mẫu lại từ file). `--max-gap-s` rút ngắn khoảng nghỉ giữa các chuyến. `--limit`, `--loop` giới hạn hoặc lặp lại.
 - Đã kiểm tra thủ công: phát 30 bản ghi ở speed 20 mất ~8 giây (đúng 145 giây dữ liệu / 20); `--interval` ngoài 5-10 bị từ chối; nạp cấu hình từ JSON hoạt động.
 
-## 6. Kịch bản di chuyển (4.2.3)
+## 6. Kịch bản di chuyển 
 
 | Kịch bản | Mô tả | Số chuyến | Số dòng | Dòng gán nhãn bất thường |
 |---|---|---|---|---|
@@ -105,7 +105,7 @@ S06 GPS sai (độ phủ của bộ phát hiện đơn giản):
 
 Loại `drift` (trôi chậm 80-200 m) không bị bộ phát hiện đơn giản bắt được, cần lọc theo quỹ đạo (ví dụ Kalman/map-matching) ở bước sau.
 
-## 7. Rà soát traffic tuần 3 và tổng hợp theo giờ (4.2.4)
+## 7. Rà soát traffic tuần 3 và tổng hợp theo giờ 
 
 `traffic_summary.csv`: 855 dòng (171 mức tuyến thật, 684 mức đoạn mô phỏng), chia theo `day_type` = all/weekday/weekend, 19 giờ có dữ liệu.
 
@@ -142,7 +142,7 @@ Vận tốc thật theo tuyến (trung vị, km/h) theo khung giờ, ngày thư�
 | cao_diem_chieu | 18.0 | 20.7 | 13.4 |
 | toi | 22.7 | 20.8 | 19.2 |
 
-## 8. Chuẩn hóa dữ liệu đơn hàng (4.2.5)
+## 8. Chuẩn hóa dữ liệu đơn hàng (
 
 `delivery_orders.csv` giữ nguyên các cột tuần 3 và thêm các cột sau:
 
@@ -165,7 +165,7 @@ Giả định cần biết:
 - Ngưỡng `at_risk` = 10 phút là giá trị tạm do người làm đặt; nên thống nhất lại với Người làm cảnh báo trễ (mục 4.4.2).
 - Xe đến sớm hơn giờ bắt đầu khung thì vẫn giao ngay, không chờ. Giờ đến phụ thuộc geometry tổng hợp nên sẽ đổi khi chạy lại với `--osrm`.
 
-## 9. Kiểm tra chất lượng dữ liệu (4.2.6)
+## 9. Kiểm tra chất lượng dữ liệu 
 
 Đạt 26/28 phép kiểm tra tự động.
 
@@ -209,11 +209,3 @@ Các phép kiểm tra không đạt phản ánh hạn chế đã biết (tọa �
 3. GPS mô phỏng không phản ánh hành vi tài xế thật (đèn đỏ, rẽ, đường một chiều). Chỉ dùng để thử pipeline, không dùng để báo cáo độ chính xác mô hình.
 4. Nhiễu GPS và tỉ lệ bất thường (1,5% nhảy vị trí, v.v.) là giả định của người làm, chưa lấy từ thiết bị thật.
 5. Dữ liệu vận tốc thật vẫn chỉ ở mức tuyến và từ một nguồn (Google Maps).
-
-## 11. Chạy lại
-
-```bash
-cd data/scripts
-python prepare_week4_data.py            # hoặc thêm --osrm / --interval 10
-```
-Yêu cầu: Python 3.9+, `pip install pandas numpy`. `dataset_manifest_week4.json` lưu SHA-256 của các file đầu ra.
