@@ -1,182 +1,223 @@
-import copy
-import json
-import sys
+import _paths
+import math
 import unittest
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "src"))
+import osrm_test_server
+from osrm_client import (OsrmClient, OsrmConfig, OsrmNoRouteError, OsrmUnavailableError,
+                         RouteResult)
+from osrm_test_server import FakeOsrmServer
+from route_selector import (NoValidRouteError, RouteCandidate, SOURCE_ML, SOURCE_OSRM,
+                            fill_osrm_fallback, needs_osrm_fallback, resolve_eta,
+                            select_route, select_route_with_fallback)
 
-import route_selector as rs
-
-EXAMPLES = ROOT / "examples"
-
-
-def make_request(routes, **extra):
-    payload = {
-        "schema_version": "1.0",
-        "request_id": "REQ-T",
-        "order_id": "ORD-T",
-        "candidate_routes": routes,
-    }
-    payload.update(extra)
-    return payload
+A = (10.0, 106.0)
+B = (10.1, 106.0)
 
 
-def route(route_id, distance_km, eta):
-    return {"route_id": route_id, "distance_km": distance_km, "predicted_eta_minutes": eta}
+class StubOsrm:
+    def __init__(self, results=None, error=None):
+        self.results = results or {}
+        self.error = error
+        self.calls = []
+
+    def route(self, origin, destination):
+        self.calls.append((origin, destination))
+        if self.error is not None:
+            raise self.error
+        return self.results[(origin, destination)]
 
 
-class SelectionRulesTests(unittest.TestCase):
-    def test_01_single_candidate_is_selected(self):
-        result = rs.handle_request(make_request([route("R1", 10.0, 30.0)]))
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["selected_route"]["route_id"], "R1")
-        self.assertEqual(result["candidates_evaluated"], 1)
-        self.assertFalse(result["tie_break_applied"])
+class TestRouteSelector(unittest.TestCase):
+    def test_chon_eta_ml_thap_nhat(self):
+        res = select_route([
+            RouteCandidate("A", eta_ml=900, distance_m=5000),
+            RouteCandidate("B", eta_ml=700, distance_m=7000),
+            RouteCandidate("C", eta_ml=800, distance_m=4000),
+        ])
+        self.assertEqual(res.best.route_id, "B")
+        self.assertEqual([r.route_id for r in res.ranking], ["B", "C", "A"])
+        self.assertFalse(res.tie_broken)
 
-    def test_02_lowest_eta_is_selected(self):
-        routes = [route("R1", 12.4, 38.5), route("R2", 9.8, 35.0), route("R3", 15.1, 41.2)]
-        result = rs.handle_request(make_request(routes))
-        self.assertEqual(result["selected_route"]["route_id"], "R2")
+    def test_uu_tien_ml_du_osrm_thap_hon(self):
+        res = select_route([
+            RouteCandidate("A", eta_ml=1000, eta_osrm=100),
+            RouteCandidate("B", eta_ml=900, eta_osrm=2000),
+        ])
+        self.assertEqual(res.best.route_id, "B")
+        self.assertEqual(res.best.source, SOURCE_ML)
 
-    def test_03_equal_eta_prefers_shorter_distance(self):
-        routes = [route("R1", 12.0, 30.0), route("R2", 9.0, 30.0)]
-        result = rs.handle_request(make_request(routes))
-        self.assertEqual(result["selected_route"]["route_id"], "R2")
-        self.assertTrue(result["tie_break_applied"])
+    def test_fallback_osrm_khi_thieu_ml(self):
+        res = select_route([
+            RouteCandidate("A", eta_ml=None, eta_osrm=600),
+            RouteCandidate("B", eta_ml=800, eta_osrm=300),
+        ])
+        self.assertEqual(res.best.route_id, "A")
+        self.assertEqual(res.best.source, SOURCE_OSRM)
+        self.assertTrue(any("fallback" in w for w in res.warnings))
+        self.assertTrue(any("nguồn khác nhau" in w for w in res.warnings))
 
-    def test_04_equal_eta_and_distance_prefers_smaller_route_id(self):
-        routes = [route("R9", 10.0, 30.0), route("R2", 10.0, 30.0)]
-        result = rs.handle_request(make_request(routes))
-        self.assertEqual(result["selected_route"]["route_id"], "R2")
-        self.assertTrue(result["tie_break_applied"])
+    def test_eta_ml_khong_hop_le_dung_fallback(self):
+        for bad in (math.nan, -5, math.inf, "abc", True):
+            eta, src = resolve_eta(RouteCandidate("X", eta_ml=bad, eta_osrm=500))
+            self.assertEqual((eta, src), (500.0, SOURCE_OSRM), msg=str(bad))
 
-    def test_05_ranking_is_sorted_with_consecutive_ranks(self):
-        routes = [route("R1", 12.4, 38.5), route("R2", 9.8, 35.0), route("R3", 15.1, 41.2)]
-        result = rs.handle_request(make_request(routes))
-        self.assertEqual([r["route_id"] for r in result["ranking"]], ["R2", "R1", "R3"])
-        self.assertEqual([r["rank"] for r in result["ranking"]], [1, 2, 3])
-        self.assertEqual(result["candidates_evaluated"], 3)
+    def test_eta_bang_nhau_chon_tuyen_ngan_hon(self):
+        res = select_route([
+            RouteCandidate("A", eta_ml=600, distance_m=8000),
+            RouteCandidate("B", eta_ml=600, distance_m=6000),
+        ])
+        self.assertEqual(res.best.route_id, "B")
+        self.assertTrue(res.tie_broken)
 
-    def test_06_input_payload_is_not_mutated(self):
-        payload = make_request([route("R1", 12.4, 38.5), route("R2", 9.8, 35.0)])
-        snapshot = copy.deepcopy(payload)
-        rs.handle_request(payload)
-        self.assertEqual(payload, snapshot)
+    def test_eta_va_khoang_cach_bang_nhau_theo_route_id(self):
+        a = select_route([RouteCandidate("B", eta_ml=600, distance_m=6000),
+                          RouteCandidate("A", eta_ml=600, distance_m=6000)])
+        b = select_route([RouteCandidate("A", eta_ml=600, distance_m=6000),
+                          RouteCandidate("B", eta_ml=600, distance_m=6000)])
+        self.assertEqual(a.best.route_id, "A")
+        self.assertEqual(b.best.route_id, "A")
 
+    def test_thieu_khoang_cach_khi_hoa_xep_sau(self):
+        res = select_route([RouteCandidate("A", eta_ml=600),
+                            RouteCandidate("B", eta_ml=600, distance_m=9000)])
+        self.assertEqual(res.best.route_id, "B")
 
-class ResponseContractTests(unittest.TestCase):
-    def test_07_success_response_has_contract_keys(self):
-        result = rs.handle_request(make_request([route("R1", 10.0, 30.0)]))
-        self.assertEqual(
-            set(result),
-            {
-                "schema_version",
-                "request_id",
-                "order_id",
-                "status",
-                "selected_route",
-                "ranking",
-                "candidates_evaluated",
-                "tie_break_applied",
-            },
-        )
-        self.assertEqual(result["schema_version"], "1.0")
-        self.assertEqual(
-            set(result["selected_route"]),
-            {"route_id", "distance_km", "predicted_eta_minutes"},
-        )
+    def test_loai_tuyen_thieu_eta_va_khong_di_duoc(self):
+        res = select_route([
+            RouteCandidate("A"),
+            RouteCandidate("B", eta_ml=100, drivable=False),
+            RouteCandidate("C", eta_ml=500),
+        ])
+        self.assertEqual(res.best.route_id, "C")
+        reasons = dict(res.excluded)
+        self.assertIn("thiếu ETA", reasons["A"])
+        self.assertIn("không đi được", reasons["B"])
 
-    def test_08_request_and_order_id_are_echoed_or_null(self):
-        result = rs.handle_request(make_request([route("R1", 10.0, 30.0)]))
-        self.assertEqual(result["request_id"], "REQ-T")
-        self.assertEqual(result["order_id"], "ORD-T")
-        bare = {"candidate_routes": [route("R1", 10.0, 30.0)]}
-        result = rs.handle_request(bare)
-        self.assertEqual(result["status"], "ok")
-        self.assertIsNone(result["request_id"])
-        self.assertIsNone(result["order_id"])
+    def test_khong_co_tuyen_hop_le(self):
+        with self.assertRaises(NoValidRouteError):
+            select_route([RouteCandidate("A"),
+                          RouteCandidate("B", eta_ml=100, drivable=False)])
 
+    def test_danh_sach_rong(self):
+        with self.assertRaises(NoValidRouteError):
+            select_route([])
 
-class ErrorHandlingTests(unittest.TestCase):
-    def assert_error(self, result, code, field=None):
-        self.assertEqual(result["status"], "error")
-        self.assertEqual(set(result["error"]), {"code", "message", "field"})
-        self.assertEqual(result["error"]["code"], code)
-        self.assertTrue(result["error"]["message"])
-        if field is not None:
-            self.assertEqual(result["error"]["field"], field)
-        self.assertNotIn("selected_route", result)
+    def test_route_id_trung_lap_bi_loai(self):
+        res = select_route([RouteCandidate("A", eta_ml=500),
+                            RouteCandidate("A", eta_ml=100)])
+        self.assertEqual(res.best.eta_s, 500)
+        self.assertEqual(len(res.excluded), 1)
 
-    def test_09_malformed_input_is_rejected(self):
-        self.assert_error(rs.handle_request([1, 2, 3]), rs.ERR_INVALID_REQUEST)
-        self.assert_error(rs.handle_request(None), rs.ERR_INVALID_REQUEST)
-        output = json.loads(rs.handle_json("{not valid json"))
-        self.assert_error(output, rs.ERR_INVALID_JSON)
+    def test_from_dict(self):
+        c = RouteCandidate.from_dict({"route_id": 7, "eta_ml": 300, "drivable": False})
+        self.assertEqual((c.route_id, c.eta_ml, c.drivable), ("7", 300, False))
 
-    def test_10_missing_candidate_routes(self):
-        payload = {"schema_version": "1.0", "request_id": "REQ-X"}
-        result = rs.handle_request(payload)
-        self.assert_error(result, rs.ERR_MISSING_FIELD, "candidate_routes")
-        self.assertEqual(result["request_id"], "REQ-X")
-
-    def test_11_empty_candidate_list(self):
-        result = rs.handle_request(make_request([]))
-        self.assert_error(result, rs.ERR_EMPTY_CANDIDATES, "candidate_routes")
-
-    def test_12_missing_eta_reports_field_path(self):
-        routes = [route("R1", 10.0, 30.0), {"route_id": "R2", "distance_km": 8.0}]
-        result = rs.handle_request(make_request(routes))
-        self.assert_error(
-            result, rs.ERR_MISSING_FIELD, "candidate_routes[1].predicted_eta_minutes"
-        )
-
-    def test_13_string_number_is_invalid_type(self):
-        result = rs.handle_request(make_request([route("R1", 10.0, "30")]))
-        self.assert_error(
-            result, rs.ERR_INVALID_TYPE, "candidate_routes[0].predicted_eta_minutes"
-        )
-
-    def test_14_boolean_is_not_accepted_as_number(self):
-        result = rs.handle_request(make_request([route("R1", True, 30.0)]))
-        self.assert_error(result, rs.ERR_INVALID_TYPE, "candidate_routes[0].distance_km")
-
-    def test_15_non_positive_or_non_finite_values_are_invalid(self):
-        for bad in (0, -5, -0.1, float("nan"), float("inf"), float("-inf")):
-            with self.subTest(value=bad):
-                result = rs.handle_request(make_request([route("R1", 10.0, bad)]))
-                self.assert_error(
-                    result,
-                    rs.ERR_INVALID_VALUE,
-                    "candidate_routes[0].predicted_eta_minutes",
-                )
-
-    def test_16_duplicate_route_id(self):
-        routes = [route("R1", 10.0, 30.0), route("R1", 9.0, 28.0)]
-        result = rs.handle_request(make_request(routes))
-        self.assert_error(result, rs.ERR_DUPLICATE_ROUTE_ID, "candidate_routes[1].route_id")
-
-    def test_17_unsupported_schema_version(self):
-        payload = make_request([route("R1", 10.0, 30.0)], schema_version="2.0")
-        result = rs.handle_request(payload)
-        self.assert_error(result, rs.ERR_UNSUPPORTED_SCHEMA_VERSION, "schema_version")
+    def test_from_dict_toa_do(self):
+        c = RouteCandidate.from_dict({"route_id": "R", "origin": [10.0, 106.0],
+                                      "destination": [10.1, 106.0]})
+        self.assertEqual((c.origin, c.destination), (A, B))
+        with self.assertRaises(ValueError):
+            RouteCandidate.from_dict({"route_id": "R", "origin": [1, 2, 3]})
 
 
-class SampleJsonTests(unittest.TestCase):
-    def read_json(self, name):
-        return json.loads((EXAMPLES / name).read_text(encoding="utf-8"))
+class TestFallbackWithStub(unittest.TestCase):
+    def test_khong_goi_osrm_khi_da_co_eta(self):
+        stub = StubOsrm()
+        cands = [RouteCandidate("A", eta_ml=500, origin=A, destination=B),
+                 RouteCandidate("B", eta_osrm=400, origin=A, destination=B),
+                 RouteCandidate("C", eta_ml=100, drivable=False, origin=A, destination=B)]
+        res = select_route_with_fallback(cands, stub)
+        self.assertEqual(stub.calls, [])
+        self.assertEqual(res.best.route_id, "B")
 
-    def test_18_sample_json_files_match_actual_output(self):
-        request = (EXAMPLES / "sample_request.json").read_text(encoding="utf-8")
-        actual = json.loads(rs.handle_json(request))
-        self.assertEqual(actual, self.read_json("sample_response.json"))
-        self.assertEqual(actual["status"], "ok")
+    def test_goi_osrm_dung_cho_tuyen_thieu_eta(self):
+        stub = StubOsrm({(A, B): RouteResult(450.0, 7000.0)})
+        cands = [RouteCandidate("A", eta_ml=900),
+                 RouteCandidate("B", origin=A, destination=B)]
+        res = select_route_with_fallback(cands, stub)
+        self.assertEqual(stub.calls, [(A, B)])
+        self.assertEqual(res.best.route_id, "B")
+        self.assertEqual(res.best.source, SOURCE_OSRM)
+        self.assertEqual(res.best.distance_m, 7000.0)
+        self.assertTrue(any("fallback" in w for w in res.warnings))
 
-        bad_request = (EXAMPLES / "sample_request_error.json").read_text(encoding="utf-8")
-        actual_error = json.loads(rs.handle_json(bad_request))
-        self.assertEqual(actual_error, self.read_json("sample_response_error.json"))
-        self.assertEqual(actual_error["status"], "error")
+    def test_giu_khoang_cach_da_co_khi_dien_fallback(self):
+        stub = StubOsrm({(A, B): RouteResult(450.0, 7000.0)})
+        filled, failures = fill_osrm_fallback(
+            [RouteCandidate("B", distance_m=1234.0, origin=A, destination=B)], stub)
+        self.assertEqual(filled[0].distance_m, 1234.0)
+        self.assertEqual(filled[0].eta_osrm, 450.0)
+        self.assertEqual(failures, {})
+
+    def test_khong_toa_do_thi_khong_goi_va_bi_loai(self):
+        stub = StubOsrm()
+        res = select_route_with_fallback(
+            [RouteCandidate("A", eta_ml=900), RouteCandidate("B")], stub)
+        self.assertEqual(stub.calls, [])
+        self.assertIn("thiếu ETA", dict(res.excluded)["B"])
+
+    def test_loi_osrm_khong_bi_che_giau(self):
+        stub = StubOsrm(error=OsrmUnavailableError("hết số lần thử"))
+        res = select_route_with_fallback(
+            [RouteCandidate("A", eta_ml=900), RouteCandidate("B", origin=A, destination=B)],
+            stub)
+        self.assertEqual(res.best.route_id, "A")
+        self.assertIn("OSRM lỗi", dict(res.excluded)["B"])
+        self.assertTrue(any("Gọi OSRM thất bại" in w for w in res.warnings))
+
+    def test_tat_ca_loi_osrm_nem_no_valid_route(self):
+        stub = StubOsrm(error=OsrmNoRouteError("không có đường"))
+        with self.assertRaises(NoValidRouteError) as ctx:
+            select_route_with_fallback([RouteCandidate("B", origin=A, destination=B)], stub)
+        self.assertIn("OSRM lỗi", str(ctx.exception))
+
+    def test_tuyen_khong_di_duoc_khong_goi_osrm(self):
+        stub = StubOsrm()
+        with self.assertRaises(NoValidRouteError):
+            select_route_with_fallback(
+                [RouteCandidate("B", drivable=False, origin=A, destination=B)], stub)
+        self.assertEqual(stub.calls, [])
+
+    def test_route_id_trung_chi_goi_mot_lan(self):
+        stub = StubOsrm({(A, B): RouteResult(450.0, 7000.0)})
+        select_route_with_fallback(
+            [RouteCandidate("B", origin=A, destination=B),
+             RouteCandidate("B", origin=A, destination=B)], stub)
+        self.assertEqual(len(stub.calls), 1)
+
+    def test_needs_osrm_fallback(self):
+        self.assertTrue(needs_osrm_fallback(RouteCandidate("A")))
+        self.assertFalse(needs_osrm_fallback(RouteCandidate("A", eta_ml=1)))
+        self.assertFalse(needs_osrm_fallback(RouteCandidate("A", drivable=False)))
+
+    def test_khong_truyen_osrm_giong_select_route(self):
+        res = select_route_with_fallback([RouteCandidate("A", eta_ml=5)])
+        self.assertEqual(res.best.route_id, "A")
+
+
+class TestFallbackWithFakeServer(unittest.TestCase):
+    def test_tich_hop_client_that_voi_server_gia(self):
+        with FakeOsrmServer() as server:
+            client = OsrmClient(OsrmConfig(server.base_url, timeout_s=2, max_attempts=2,
+                                           backoff_s=0))
+            cands = [RouteCandidate("A", eta_ml=5000),
+                     RouteCandidate("B", origin=A, destination=B)]
+            res = select_route_with_fallback(cands, client)
+            self.assertEqual(res.best.route_id, "B")
+            self.assertAlmostEqual(res.best.eta_s, 1110.0, delta=0.01)
+            self.assertEqual(server.hits, 1)
+
+    def test_server_loi_tuyen_bi_loai_co_ly_do(self):
+        with FakeOsrmServer() as server:
+            server.mode = "http500"
+            client = OsrmClient(OsrmConfig(server.base_url, timeout_s=2, max_attempts=2,
+                                           backoff_s=0))
+            res = select_route_with_fallback(
+                [RouteCandidate("A", eta_ml=5000),
+                 RouteCandidate("B", origin=A, destination=B)], client)
+            self.assertEqual(res.best.route_id, "A")
+            self.assertIn("OSRM lỗi", dict(res.excluded)["B"])
+            self.assertEqual(server.hits, 2)
 
 
 if __name__ == "__main__":

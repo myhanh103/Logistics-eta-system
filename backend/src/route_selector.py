@@ -1,198 +1,212 @@
-"""Chon tuyen giao hang tu nhieu tuyen ung vien (Smart Logistics - Tuan 2).
+"""route_selector.py - Chọn tuyến tối ưu từ danh sách tuyến ứng viên.
 
-Hop dong input/output (schema_version 1.0) duoc mo ta o docs/API_CONTRACT.md.
+Quy tắc đã thống nhất:
+  1. Mỗi tuyến có ETA do mô hình ML dự đoán (eta_ml). Nếu ETA ML thiếu hoặc
+     không hợp lệ (None, NaN, âm, vô cực) thì dùng ETA của OSRM (eta_osrm).
+  2. Chọn tuyến có ETA thấp nhất.
+  3. ETA bằng nhau -> ưu tiên tuyến ngắn hơn (distance_m), sau đó theo route_id
+     (để kết quả luôn xác định, không phụ thuộc thứ tự đầu vào).
+  4. Tuyến không đi được (drivable=False) hoặc không có ETA nào dùng được bị loại.
+  5. Không còn tuyến hợp lệ -> ném NoValidRouteError.
 
-Quy tac chon tuyen (xac dinh, co thu tu uu tien):
-    1. predicted_eta_minutes nho nhat
-    2. neu bang nhau: distance_km nho hon
-    3. neu van bang nhau: route_id theo thu tu bang chu cai
+Fallback OSRM thật (select_route_with_fallback)
+  - Chỉ gọi OSRM Route API cho tuyến thiếu cả eta_ml lẫn eta_osrm và có đủ
+    origin, destination (lat, lon); tuyến đã có ETA không bao giờ bị gọi API.
+  - Lỗi OSRM không bị che giấu: tuyến đó bị loại kèm lý do "OSRM lỗi: ..." và có
+    cảnh báo trong kết quả.
 
-Ba ham cong khai:
-    select_route(payload)  -> dict ket qua, nem RouteSelectionError neu input sai
-    handle_request(payload) -> dict, KHONG nem loi; loi tra ve dang status="error"
-    handle_json(text)       -> str JSON, dung cho Backend nhan chuoi JSON
+Đơn vị: ETA tính bằng giây, khoảng cách tính bằng mét.
 """
-
 from __future__ import annotations
 
-import argparse
-import json
 import math
-import sys
-from typing import Any
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-SCHEMA_VERSION = "1.0"
+from osrm_client import OsrmError
 
-ERR_INVALID_JSON = "INVALID_JSON"
-ERR_INVALID_REQUEST = "INVALID_REQUEST"
-ERR_UNSUPPORTED_SCHEMA_VERSION = "UNSUPPORTED_SCHEMA_VERSION"
-ERR_MISSING_FIELD = "MISSING_FIELD"
-ERR_INVALID_TYPE = "INVALID_TYPE"
-ERR_INVALID_VALUE = "INVALID_VALUE"
-ERR_EMPTY_CANDIDATES = "EMPTY_CANDIDATES"
-ERR_DUPLICATE_ROUTE_ID = "DUPLICATE_ROUTE_ID"
+SOURCE_ML = "ml"
+SOURCE_OSRM = "osrm"
+_TIE_TOL = 1e-6
+
+Coord = Tuple[float, float]
 
 
-class RouteSelectionError(Exception):
-    """Loi input co ma loi on dinh de Backend xu ly."""
-
-    def __init__(self, code: str, message: str, field: str | None = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.field = field
+class NoValidRouteError(ValueError):
+    """Không có tuyến nào hợp lệ để chọn."""
 
 
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+def _as_coord(value: Any) -> Optional[Coord]:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return (float(value[0]), float(value[1]))
+    raise ValueError(f"Toạ độ phải là (lat, lon): {value!r}")
 
 
-def _read_positive_number(route: dict, key: str, prefix: str) -> float:
-    field = f"{prefix}.{key}"
-    if key not in route:
-        raise RouteSelectionError(ERR_MISSING_FIELD, f"Thieu truong '{key}'.", field)
-    value = route[key]
-    if not _is_number(value):
-        raise RouteSelectionError(ERR_INVALID_TYPE, f"'{key}' phai la so.", field)
-    if not math.isfinite(value) or value <= 0:
-        raise RouteSelectionError(
-            ERR_INVALID_VALUE, f"'{key}' phai la so huu han lon hon 0.", field
-        )
-    return value
+@dataclass(frozen=True)
+class RouteCandidate:
+    route_id: str
+    eta_ml: Optional[float] = None
+    eta_osrm: Optional[float] = None
+    distance_m: Optional[float] = None
+    drivable: bool = True
+    origin: Optional[Coord] = None
+    destination: Optional[Coord] = None
 
-
-def _validate_request(payload: Any) -> list[dict]:
-    if not isinstance(payload, dict):
-        raise RouteSelectionError(ERR_INVALID_REQUEST, "Request phai la mot JSON object.")
-
-    version = payload.get("schema_version", SCHEMA_VERSION)
-    if version != SCHEMA_VERSION:
-        raise RouteSelectionError(
-            ERR_UNSUPPORTED_SCHEMA_VERSION,
-            f"Chi ho tro schema_version '{SCHEMA_VERSION}'.",
-            "schema_version",
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "RouteCandidate":
+        return cls(
+            route_id=str(d["route_id"]),
+            eta_ml=d.get("eta_ml"),
+            eta_osrm=d.get("eta_osrm"),
+            distance_m=d.get("distance_m"),
+            drivable=bool(d.get("drivable", True)),
+            origin=_as_coord(d.get("origin")),
+            destination=_as_coord(d.get("destination")),
         )
 
-    if "candidate_routes" not in payload:
-        raise RouteSelectionError(
-            ERR_MISSING_FIELD, "Thieu truong 'candidate_routes'.", "candidate_routes"
-        )
-    candidates = payload["candidate_routes"]
-    if not isinstance(candidates, list):
-        raise RouteSelectionError(
-            ERR_INVALID_TYPE, "'candidate_routes' phai la danh sach.", "candidate_routes"
-        )
-    if not candidates:
-        raise RouteSelectionError(
-            ERR_EMPTY_CANDIDATES,
-            "Can it nhat mot tuyen ung vien.",
-            "candidate_routes",
-        )
 
-    seen: set[str] = set()
-    cleaned: list[dict] = []
-    for index, route in enumerate(candidates):
-        prefix = f"candidate_routes[{index}]"
-        if not isinstance(route, dict):
-            raise RouteSelectionError(
-                ERR_INVALID_TYPE, "Moi tuyen phai la JSON object.", prefix
-            )
-        if "route_id" not in route:
-            raise RouteSelectionError(
-                ERR_MISSING_FIELD, "Thieu truong 'route_id'.", f"{prefix}.route_id"
-            )
-        route_id = route["route_id"]
-        if not isinstance(route_id, str):
-            raise RouteSelectionError(
-                ERR_INVALID_TYPE, "'route_id' phai la chuoi.", f"{prefix}.route_id"
-            )
-        if not route_id.strip():
-            raise RouteSelectionError(
-                ERR_INVALID_VALUE, "'route_id' khong duoc rong.", f"{prefix}.route_id"
-            )
-        if route_id in seen:
-            raise RouteSelectionError(
-                ERR_DUPLICATE_ROUTE_ID,
-                f"route_id '{route_id}' bi trung.",
-                f"{prefix}.route_id",
-            )
-        seen.add(route_id)
-        cleaned.append(
-            {
-                "route_id": route_id,
-                "distance_km": _read_positive_number(route, "distance_km", prefix),
-                "predicted_eta_minutes": _read_positive_number(
-                    route, "predicted_eta_minutes", prefix
-                ),
-            }
-        )
-    return cleaned
+@dataclass(frozen=True)
+class RankedRoute:
+    route_id: str
+    eta_s: float
+    source: str
+    distance_m: Optional[float]
 
 
-def _sort_key(route: dict) -> tuple:
-    return (route["predicted_eta_minutes"], route["distance_km"], route["route_id"])
+@dataclass
+class SelectionResult:
+    best: RankedRoute
+    ranking: List[RankedRoute]
+    excluded: List[Tuple[str, str]] = field(default_factory=list)
+    tie_broken: bool = False
+    warnings: List[str] = field(default_factory=list)
 
 
-def select_route(payload: Any) -> dict:
-    """Chon tuyen tot nhat. Nem RouteSelectionError neu input khong hop le."""
-    routes = _validate_request(payload)
-    ranked = sorted(routes, key=_sort_key)
-
-    best_eta = ranked[0]["predicted_eta_minutes"]
-    tie_break_applied = sum(1 for r in ranked if r["predicted_eta_minutes"] == best_eta) > 1
-
-    ranking = [{"rank": i, **route} for i, route in enumerate(ranked, start=1)]
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "request_id": payload.get("request_id"),
-        "order_id": payload.get("order_id"),
-        "status": "ok",
-        "selected_route": dict(ranked[0]),
-        "ranking": ranking,
-        "candidates_evaluated": len(ranked),
-        "tie_break_applied": tie_break_applied,
-    }
-
-
-def _error_response(payload: Any, error: RouteSelectionError) -> dict:
-    meta = payload if isinstance(payload, dict) else {}
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "request_id": meta.get("request_id"),
-        "order_id": meta.get("order_id"),
-        "status": "error",
-        "error": {"code": error.code, "message": error.message, "field": error.field},
-    }
-
-
-def handle_request(payload: Any) -> dict:
-    """Giong select_route nhung khong nem loi; loi duoc dong goi trong response."""
+def _valid_number(x: Any) -> bool:
+    if x is None or isinstance(x, bool):
+        return False
     try:
-        return select_route(payload)
-    except RouteSelectionError as error:
-        return _error_response(payload, error)
-
-
-def handle_json(text: str) -> str:
-    """Nhan chuoi JSON, tra ve chuoi JSON (UTF-8, indent=2)."""
-    try:
-        payload = json.loads(text)
+        v = float(x)
     except (TypeError, ValueError):
-        error = RouteSelectionError(ERR_INVALID_JSON, "Chuoi dau vao khong phai JSON hop le.")
-        return json.dumps(_error_response(None, error), ensure_ascii=False, indent=2)
-    return json.dumps(handle_request(payload), ensure_ascii=False, indent=2)
+        return False
+    return math.isfinite(v) and v >= 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Chon tuyen giao hang tu file JSON request.")
-    parser.add_argument("request_file", help="Duong dan file JSON request")
-    args = parser.parse_args(argv)
+def resolve_eta(c: RouteCandidate) -> Tuple[Optional[float], Optional[str]]:
+    """Trả về (eta, nguồn). Ưu tiên ML, fallback OSRM, không có thì (None, None)."""
+    if _valid_number(c.eta_ml):
+        return float(c.eta_ml), SOURCE_ML
+    if _valid_number(c.eta_osrm):
+        return float(c.eta_osrm), SOURCE_OSRM
+    return None, None
 
-    with open(args.request_file, encoding="utf-8") as handle:
-        output = handle_json(handle.read())
-    print(output)
-    return 0 if json.loads(output)["status"] == "ok" else 1
+
+def needs_osrm_fallback(c: RouteCandidate) -> bool:
+    return c.drivable and resolve_eta(c)[0] is None
+
+
+def select_route(candidates: Iterable[RouteCandidate],
+                 failure_reasons: Optional[Dict[str, str]] = None) -> SelectionResult:
+    cands = list(candidates)
+    if not cands:
+        raise NoValidRouteError("Danh sách tuyến ứng viên rỗng")
+    failure_reasons = failure_reasons or {}
+
+    ranked: List[RankedRoute] = []
+    excluded: List[Tuple[str, str]] = []
+    seen = set()
+    for c in cands:
+        if c.route_id in seen:
+            excluded.append((c.route_id, "route_id trùng lặp"))
+            continue
+        seen.add(c.route_id)
+        if not c.drivable:
+            excluded.append((c.route_id, "đường không đi được"))
+            continue
+        eta, src = resolve_eta(c)
+        if eta is None:
+            reason = "thiếu ETA (cả ML lẫn OSRM)"
+            if c.route_id in failure_reasons:
+                reason += f"; {failure_reasons[c.route_id]}"
+            excluded.append((c.route_id, reason))
+            continue
+        dist = float(c.distance_m) if _valid_number(c.distance_m) else None
+        ranked.append(RankedRoute(c.route_id, eta, src, dist))
+
+    if not ranked:
+        reasons = "; ".join(f"{rid}: {why}" for rid, why in excluded)
+        raise NoValidRouteError(f"Không có tuyến hợp lệ ({reasons})")
+
+    ranked.sort(key=lambda r: (r.eta_s,
+                               r.distance_m if r.distance_m is not None else math.inf,
+                               r.route_id))
+    best = ranked[0]
+    tie = any(abs(r.eta_s - best.eta_s) <= _TIE_TOL for r in ranked[1:])
+
+    warnings: List[str] = []
+    if len({r.source for r in ranked}) > 1:
+        warnings.append("Các tuyến dùng ETA từ nguồn khác nhau (ML và OSRM); "
+                        "ETA OSRM không tính tắc đường nên có thể thấp hơn thực tế.")
+    if best.source == SOURCE_OSRM:
+        warnings.append(f"Tuyến {best.route_id} được chọn bằng ETA fallback OSRM.")
+    if tie:
+        warnings.append("ETA bằng nhau, đã phân định theo khoảng cách ngắn hơn rồi route_id.")
+
+    return SelectionResult(best=best, ranking=ranked, excluded=excluded,
+                           tie_broken=tie, warnings=warnings)
+
+
+def fill_osrm_fallback(candidates: Iterable[RouteCandidate],
+                       osrm: Any) -> Tuple[List[RouteCandidate], Dict[str, str]]:
+    """Gọi osrm.route(origin, destination) cho đúng các tuyến thiếu ETA.
+
+    Trả về (danh sách tuyến đã điền eta_osrm, {route_id: lý do lỗi OSRM}).
+    """
+    filled: List[RouteCandidate] = []
+    failures: Dict[str, str] = {}
+    called = set()
+    for c in candidates:
+        if (not needs_osrm_fallback(c) or c.origin is None or c.destination is None
+                or c.route_id in called):
+            filled.append(c)
+            continue
+        called.add(c.route_id)
+        try:
+            result = osrm.route(c.origin, c.destination)
+        except OsrmError as exc:
+            failures[c.route_id] = f"OSRM lỗi: {exc}"
+            filled.append(c)
+            continue
+        distance = c.distance_m if _valid_number(c.distance_m) else result.distance_m
+        filled.append(replace(c, eta_osrm=result.duration_s, distance_m=distance))
+    return filled, failures
+
+
+def select_route_with_fallback(candidates: Iterable[RouteCandidate],
+                               osrm: Any = None) -> SelectionResult:
+    cands = list(candidates)
+    if osrm is None:
+        return select_route(cands)
+    filled, failures = fill_osrm_fallback(cands, osrm)
+    result = select_route(filled, failure_reasons=failures)
+    if failures:
+        result.warnings.append("Gọi OSRM thất bại cho: " + ", ".join(sorted(failures))
+                               + "; các tuyến này bị loại.")
+    return result
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    demo = [
+        RouteCandidate("R1", eta_ml=1500, eta_osrm=1200, distance_m=9000),
+        RouteCandidate("R2", eta_ml=None, eta_osrm=1400, distance_m=8000),
+        RouteCandidate("R3", eta_ml=1300, distance_m=11000),
+        RouteCandidate("R4", eta_ml=900, drivable=False),
+    ]
+    res = select_route(demo)
+    print("Tuyến được chọn:", res.best)
+    for r in res.ranking:
+        print("  ", r)
+    print("Bị loại:", res.excluded)
+    print("Cảnh báo:", res.warnings)
