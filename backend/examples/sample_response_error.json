@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "request_id": "REQ-0002",
+  "order_id": "ORD-1002",
+  "status": "error",
+  "error": {
+    "code": "INVALID_VALUE",
+    "message": "'predicted_eta_minutes' phai la so huu han lon hon 0.",
+    "field": "candidate_routes[0].predicted_eta_minutes"
+  }
+}

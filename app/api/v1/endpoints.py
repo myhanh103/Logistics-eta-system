@@ -5,7 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, status, HTTPException
 from pydantic import BaseModel, Field
 
-# Import Schemas
+# Import Schemas cũ (Tuần 2 & Tuần 3)
 from app.schemas.route import (
     RouteCompareRequest,
     RouteCompareResponse,
@@ -17,6 +17,10 @@ from app.schemas.route import (
 )
 from app.schemas.gps import GpsPingRequest, GpsPingResponse
 
+# Import Schemas mới (Tuần 4)
+from app.schemas.gps import GpsIngestRequest, GpsIngestResponse
+from app.schemas.trip import TripStatusResponse
+
 # Import Services & ML
 from app.services.route_selector import calculate_haversine_distance
 from ml.inference.predict_eta import predict_eta
@@ -27,6 +31,10 @@ from app.services.multistop_optimizer import (
     optimize,
     optimize_with_osrm
 )
+
+# Import Services Tuần 4
+from app.services.trip_state_service import trip_state_service
+from app.services.realtime_eta_service import calculate_realtime_eta_and_risk
 
 router = APIRouter()
 
@@ -194,7 +202,6 @@ def plan_multistop_route(payload: MultistopRequest):
         )
 
     except (OsrmError, Exception) as e:
-        # Fallback Haversine khi OSRM lỗi hoặc không phản hồi
         nodes_coords = [Location(lat=payload.depot.lat, lng=payload.depot.lng)] + [
             Location(lat=pt.lat, lng=pt.lng) for pt in payload.delivery_points
         ]
@@ -347,13 +354,13 @@ def get_traffic_summary(
 
 
 # ==========================================
-# [3.5.7] API Tiếp nhận GPS telemetry (Chuẩn bị cho Tuần 4)
+# [3.5.7] API Tiếp nhận GPS telemetry (Legacy Stub Tuần 3)
 # ==========================================
 @router.post(
     "/gps/track",
     response_model=GpsPingResponse,
     status_code=status.HTTP_200_OK,
-    summary="[3.5.7] Tiếp nhận dữ liệu GPS định vị theo thời gian thực"
+    summary="[3.5.7] Tiếp nhận dữ liệu GPS định vị theo thời gian thực (Stub Tuần 3)"
 )
 def track_gps_location(payload: GpsPingRequest):
     return GpsPingResponse(
@@ -361,4 +368,106 @@ def track_gps_location(payload: GpsPingRequest):
         device_id=payload.device_id,
         message=f"Đã ghi nhận tọa độ ({payload.lat}, {payload.lng}) lúc {payload.timestamp}",
         recorded_at=payload.timestamp
+    )
+
+
+# ==========================================
+# [4.5.2 & 4.5.3 & 4.5.4 & 4.5.6] API Ingest GPS Realtime & Calculate ETA
+# ==========================================
+@router.post(
+    "/gps/ingest",
+    response_model=GpsIngestResponse,
+    status_code=status.HTTP_200_OK,
+    summary="[4.5.2] Tiếp nhận dữ liệu GPS thời gian thực, lưu trạng thái chuyến đi và tính lại ETA"
+)
+def ingest_gps_telemetry(payload: GpsIngestRequest):
+    if not payload.trip_id.strip():
+        raise HTTPException(status_code=400, detail="Mã chuyến đi (trip_id) không được để trống")
+
+    try:
+        processed = trip_state_service.process_gps_ping(
+            trip_id=payload.trip_id,
+            lat=payload.lat,
+            lng=payload.lng,
+            timestamp_str=payload.timestamp,
+            device_id=payload.device_id
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=422, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi hệ thống khi lưu trạng thái chuyến đi: {str(e)}")
+
+    trip = processed["trip"]
+    next_stop = processed["next_stop"]
+
+    if next_stop:
+        next_stop_id = next_stop["order_id"]
+        next_lat, next_lng = next_stop["lat"], next_stop["lng"]
+        deadline = next_stop.get("deadline")
+    else:
+        next_stop_id = "FINISHED"
+        next_lat, next_lng = payload.lat, payload.lng
+        deadline = None
+
+    # Tính toán lại ETA thời gian thực & đánh giá rủi ro trễ deadline
+    eta_res = calculate_realtime_eta_and_risk(
+        current_lat=payload.lat,
+        current_lng=payload.lng,
+        next_stop_lat=next_lat,
+        next_stop_lng=next_lng,
+        speed_kmh=payload.speed_kmh or 0.0,
+        departure_time=payload.timestamp,
+        deadline_iso=deadline
+    )
+
+    # Cập nhật các chỉ số mới vào lưu trữ trạng thái chuyến đi
+    trip["current_eta_min"] = eta_res["updated_eta_min"]
+    trip["remaining_distance_km"] = eta_res["remaining_distance_km"]
+    trip["delay_risk"] = eta_res["delay_risk"]
+
+    return GpsIngestResponse(
+        status="SUCCESS",
+        trip_id=payload.trip_id,
+        current_location={"lat": payload.lat, "lng": payload.lng},
+        next_stop_id=next_stop_id,
+        completed_stops=processed["completed_stops"],
+        remaining_distance_km=eta_res["remaining_distance_km"],
+        updated_eta_min=eta_res["updated_eta_min"],
+        delay_risk=eta_res["delay_risk"],
+        source=eta_res["source"],
+        traffic_delay_warning=eta_res["traffic_delay_warning"],
+        message=eta_res["warning_message"] or "Cập nhật vị trí và tính lại ETA thành công."
+    )
+
+
+# ==========================================
+# [4.5.5] API Truy vấn Trạng thái Chuyến đi (Frontend Polling)
+# ==========================================
+@router.get(
+    "/trips/{trip_id}/status",
+    response_model=TripStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="[4.5.5] Lấy trạng thái chuyến đi hiện tại cho Frontend Polling"
+)
+def get_trip_status(trip_id: str):
+    trip = trip_state_service.get_trip(trip_id)
+    if not trip:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy dữ liệu chuyến đi có ID: {trip_id}")
+
+    completed = [s["order_id"] for s in trip["stops"] if s["status"] == "COMPLETED"]
+    remaining = [s["order_id"] for s in trip["stops"] if s["status"] == "PENDING"]
+    current_next = remaining[0] if remaining else "COMPLETED_ALL"
+
+    return TripStatusResponse(
+        trip_id=trip["trip_id"],
+        vehicle_id=trip["vehicle_id"],
+        status=trip["status"],
+        last_known_location=trip["last_location"],
+        last_timestamp=trip["last_timestamp"],
+        completed_stops=completed,
+        remaining_stops=remaining,
+        current_next_stop=current_next,
+        remaining_distance_km=trip.get("remaining_distance_km", 0.0),
+        updated_eta_min=trip.get("current_eta_min", 0.0),
+        delay_risk=trip.get("delay_risk", "on_time")
     )

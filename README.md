@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Smart Logs - ETA API Service
 
 Hệ thống Backend tích hợp trí tuệ nhân tạo (ML) và tối ưu hóa vận tải xây dựng bằng **FastAPI** thuộc dự án **Smart Logs**, hỗ trợ dự báo thời gian di chuyển (ETA), so sánh tuyến đường, tối ưu hóa giao hàng đa điểm và tổng hợp dữ liệu giao thông tại khu vực TP. Hồ Chí Minh.
@@ -210,3 +211,7 @@ Mục đích: API Stub tiếp nhận dữ liệu GPS telemetry (tọa độ, t�
 # Kiểm thử Tự động (Testing Suite)Dự án sử dụng pytest kết hợp với TestClient để đảm bảo 100% test coverage trên toàn bộ hệ thống API và dịch vụ logic.   
 Để chạy toàn bộ bài test:
 pytest
+=======
+# Logistics-eta-system
+Machine Learning &amp; Realtime GPS for Delivery ETA Prediction and Route Optimization
+>>>>>>> group/main
